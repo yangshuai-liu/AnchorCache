@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.venv/
+
+# Persisted behavioral baseline artifacts are large and machine-specific
+configs/baseline/
+outputs/
+*.pt
+*.safetensors
+*.npy

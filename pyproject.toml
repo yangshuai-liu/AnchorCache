@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "anchorcache"
+version = "0.1.0"
+description = "A model- and modality-agnostic framework for reusing step-invariant computation in iterative generative models"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+keywords = [
+    "iterative-generation",
+    "reusable-state",
+    "kv-cache",
+    "distillation",
+    "inference-efficiency",
+]
+
+# torch is the only required dependency. The dependency stacks of the three backends conflict
+# (diffusers 0.39 vs flash-attn built against torch 2.5.1), so they are not pinned here;
+# use extras or separate virtual environments for each.
+dependencies = ["torch>=2.4"]
+
+[project.scripts]
+anchorcache-qwen-train = "anchorcache.models.qwen_image_edit.runner:train_main"
+anchorcache-qwen-infer = "anchorcache.models.qwen_image_edit.runner:infer_main"
+anchorcache-flux2-train = "anchorcache.models.flux2.runner:train_main"
+anchorcache-flux2-infer = "anchorcache.models.flux2.runner:infer_main"
+anchorcache-voice-train = "anchorcache.models.omnivoice.runner:train_main"
+anchorcache-voice-infer = "anchorcache.models.omnivoice.runner:infer_main"
+
+[project.optional-dependencies]
+# flash-attn is not included in any extras: it must be built from source against the target torch
+# version, which the pip resolver cannot handle. Install it manually.
+qwen = ["diffusers>=0.36", "transformers>=4.51", "accelerate", "peft", "deepspeed"]
+flux2 = ["diffusers==0.39.0", "transformers>=4.51", "accelerate", "peft", "deepspeed", "pyyaml", "wandb"]
+omnivoice = ["transformers>=4.51", "accelerate", "deepspeed", "soundfile"]
+
+[tool.setuptools.packages.find]
+include = ["anchorcache*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = [
+    # Long assertion messages double as documentation and exceed the line-length limit
+    "E501",
+]
+
+[tool.ruff.lint.per-file-ignores]
