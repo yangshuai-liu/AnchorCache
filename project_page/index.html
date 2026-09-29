@@ -1,0 +1,1052 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="AnchorCache: instruction anchoring for exact reference K/V reuse in in-context diffusion transformers.">
+  <meta name="keywords" content="AnchorCache, diffusion transformer, KV cache, in-context generation, on-policy distillation, image editing">
+  <meta property="og:title" content="AnchorCache: Beyond Attention Masks">
+  <meta property="og:description" content="Instruction Anchoring for Efficient In-Context Diffusion Generation. Up to 6.40x DiT speedup at full-attention quality.">
+  <meta property="og:image" content="assets/figs/method_flow.png">
+  <title>AnchorCache: Beyond Attention Masks — Instruction Anchoring for Efficient In-Context Diffusion Generation</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='14' fill='%230f766e'/><path d='M32 12v34M20 26h24M16 38c2 9 9 14 16 14s14-5 16-14' stroke='white' stroke-width='5' fill='none' stroke-linecap='round'/></svg>">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['"Inter"', "system-ui", "sans-serif"],
+            serif: ['"Source Serif 4"', "Georgia", "serif"],
+            mono: ['"JetBrains Mono"', "monospace"]
+          }
+        }
+      }
+    };
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600;8..60,700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <style>
+    :root {
+      --bg: #ffffff;
+      --text: #0f172a;
+      --muted: #64748b;
+      --line: #e2e8f0;
+      --p1: #0f766e;
+      --p2: #115e59;
+      --ours-row-bg: #e7f5f2;
+      --ours-sota-bg: #0f766e;
+      --ours-sota-text: #ffffff;
+    }
+    html, body { scroll-behavior: smooth; }
+    body { margin: 0; font-family: "Inter", system-ui, sans-serif; background: var(--bg); color: var(--text); }
+    h1, h2, h3, .table-title, .stat-num, .brand {
+      font-family: "Source Serif 4", Georgia, "Times New Roman", serif;
+      letter-spacing: -0.01em;
+    }
+    .mono { font-family: "JetBrains Mono", monospace; }
+    .gradient-text, .section-heading, .subsection-heading { color: var(--p1); }
+    .glass-nav {
+      backdrop-filter: blur(12px);
+      background: color-mix(in srgb, var(--bg) 84%, transparent);
+      border-bottom: 1px solid var(--line);
+    }
+    .section {
+      max-width: 1240px;
+      margin: 0 auto;
+      padding: 4rem 1rem;
+      border-top: 1px solid var(--line);
+      scroll-margin-top: 3.5rem;
+    }
+
+    /* ---------- Hero ---------- */
+    .hero-stage {
+      position: relative;
+      min-height: min(100vh, 1080px);
+      overflow: hidden;
+      background: #ffffff;
+    }
+    .hero-stage::after {
+      content: "";
+      position: absolute;
+      left: 0; right: 0; bottom: 0;
+      height: 130px;
+      pointer-events: none;
+      z-index: 15;
+      background: linear-gradient(to bottom, rgba(255, 255, 255, 0), #ffffff 85%);
+    }
+    .marquee-wrap {
+      position: absolute;
+      inset: 0;
+      z-index: 5;
+      padding-top: 3.5rem;
+      display: flex;
+      flex-direction: column;
+      gap: .9rem;
+      mask-image: linear-gradient(to bottom, transparent, black 12%, black 88%, transparent);
+      -webkit-mask-image: linear-gradient(to bottom, transparent, black 12%, black 88%, transparent);
+    }
+    .marquee-row { overflow: hidden; flex: 1; min-height: 0; }
+    .marquee-track {
+      display: inline-flex;
+      gap: .9rem;
+      height: 100%;
+      animation: scroll-rtl 90s linear infinite;
+    }
+    .marquee-row.reverse .marquee-track { animation-name: scroll-ltr; }
+    .marquee-track img {
+      height: 100%;
+      aspect-ratio: 1 / 1;
+      object-fit: cover;
+      border-radius: .8rem;
+      border: 1px solid var(--line);
+    }
+    @keyframes scroll-ltr { 0% { transform: translateX(-50%); } 100% { transform: translateX(0%); } }
+    @keyframes scroll-rtl { 0% { transform: translateX(0%); } 100% { transform: translateX(-50%); } }
+    @media (prefers-reduced-motion: reduce) {
+      .marquee-track { animation: none; }
+    }
+    .hero-overlay {
+      position: absolute;
+      inset: 0;
+      z-index: 20;
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.80), rgba(255, 255, 255, 0.86));
+      backdrop-filter: blur(2px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 6rem 1rem 3rem;
+    }
+    .hero-title { color: var(--p1); text-shadow: 0 1px 8px rgba(255, 255, 255, 0.5); }
+    .author-line a { color: inherit; }
+    .author-line sup { font-size: .65em; margin-left: .05em; }
+    .hero-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: .5rem;
+      padding: .8rem 1.1rem;
+      border-radius: 999px;
+      background: var(--p1);
+      color: #fff;
+      font-weight: 600;
+      transition: background .2s ease, transform .2s ease;
+    }
+    .hero-btn:hover { background: var(--p2); transform: translateY(-1px); }
+    .hero-btn.is-disabled { background: #cbd5e1; color: #475569; pointer-events: none; }
+    .hero-btn svg { width: 1.1rem; height: 1.1rem; }
+    .stat-card {
+      border: 1px solid var(--line);
+      border-radius: 1rem;
+      background: rgba(255, 255, 255, .78);
+      padding: .9rem 1rem;
+      backdrop-filter: blur(6px);
+    }
+    .stat-num { font-size: 1.9rem; font-weight: 700; color: var(--p1); line-height: 1.1; }
+    .stat-label { font-size: .82rem; color: var(--muted); margin-top: .2rem; }
+
+    /* ---------- Figures & cards ---------- */
+    .figure-img { width: 100%; display: block; background: #fff; }
+    .caption { margin-top: .9rem; font-size: .92rem; color: var(--muted); line-height: 1.5; }
+    .topo-card {
+      border: 1px solid var(--line);
+      border-radius: 1rem;
+      padding: 1.25rem;
+      background: var(--bg);
+    }
+    .topo-card.ours {
+      border-color: color-mix(in srgb, var(--p1) 60%, var(--line));
+      background: var(--ours-row-bg);
+    }
+    .check-row { display: flex; align-items: center; justify-content: space-between; gap: .75rem; padding: .45rem 0; border-top: 1px dashed var(--line); font-size: .92rem; }
+    .yes { color: #15803d; font-weight: 700; }
+    .no { color: #b91c1c; font-weight: 700; }
+    .eq-box {
+      border: 1px solid var(--line);
+      border-radius: 1rem;
+      padding: 1rem 1.25rem;
+      background: #f3faf8;
+      overflow-x: auto;
+    }
+
+    /* ---------- Showcase viewers ---------- */
+    .chip-row {
+      display: flex;
+      gap: .5rem;
+      overflow-x: auto;
+      padding: .25rem .1rem .6rem;
+      scrollbar-width: thin;
+    }
+    .chip {
+      flex: 0 0 auto;
+      border: 1px solid var(--line);
+      color: var(--muted);
+      background: var(--bg);
+      border-radius: 999px;
+      padding: .4rem .85rem;
+      font-size: .82rem;
+      white-space: nowrap;
+      cursor: pointer;
+      max-width: 260px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      transition: all .15s ease;
+    }
+    .chip:hover { border-color: color-mix(in srgb, var(--p1) 50%, var(--line)); color: var(--p1); }
+    .chip.active { background: var(--p1); border-color: var(--p1); color: #fff; }
+    .chip .paper-badge {
+      display: inline-block;
+      font-size: .64rem;
+      font-weight: 700;
+      letter-spacing: .02em;
+      padding: .02rem .4rem;
+      margin-right: .35rem;
+      border-radius: 999px;
+      background: var(--ours-row-bg);
+      color: var(--p1);
+    }
+    .chip.active .paper-badge { background: rgba(255, 255, 255, .22); color: #fff; }
+    .viewer-prompt {
+      font-size: .98rem;
+      line-height: 1.55;
+      color: var(--text);
+      border-left: 3px solid var(--p1);
+      padding: .15rem 0 .15rem .8rem;
+      margin: .6rem 0 1rem;
+    }
+    .viewer-grid { display: grid; gap: 1rem; align-items: start; }
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: .9rem;
+      overflow: hidden;
+      background: var(--bg);
+      display: flex;
+      flex-direction: column;
+    }
+    .panel.ours { border-color: var(--p1); box-shadow: 0 0 0 2px color-mix(in srgb, var(--p1) 25%, transparent); }
+    .panel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: .5rem;
+      padding: .55rem .75rem;
+      border-bottom: 1px solid var(--line);
+      font-weight: 600;
+      font-size: .9rem;
+    }
+    .panel.ours .panel-head { background: var(--ours-row-bg); color: var(--p1); }
+    .panel-img {
+      width: 100%;
+      aspect-ratio: 1 / 1;
+      object-fit: contain;
+      background: #f8fafc;
+      cursor: zoom-in;
+      display: block;
+    }
+    .ref-stack { display: grid; gap: .5rem; padding: .5rem; background: #f8fafc; flex: 1; align-content: center; }
+    .ref-stack img { width: 100%; border-radius: .5rem; object-fit: contain; max-height: 220px; cursor: zoom-in; background: #fff; }
+    .score-row { display: flex; gap: .35rem; padding: .55rem .75rem; border-top: 1px solid var(--line); flex-wrap: wrap; }
+    .score {
+      font-size: .74rem;
+      border-radius: 999px;
+      padding: .15rem .55rem;
+      background: #f1f5f9;
+      color: #334155;
+    }
+    .panel.ours .score { background: color-mix(in srgb, var(--p1) 14%, #fff); color: var(--p2); }
+    .nav-btn {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      width: 2.2rem; height: 2.2rem;
+      display: inline-grid; place-items: center;
+      color: var(--muted);
+      background: var(--bg);
+      cursor: pointer;
+    }
+    .nav-btn:hover { color: var(--p1); border-color: var(--p1); }
+
+    .video-card {
+      border: 1px solid var(--line);
+      border-radius: .9rem;
+      overflow: hidden;
+      background: var(--bg);
+      cursor: pointer;
+      transition: transform .2s ease, box-shadow .2s ease, border-color .2s ease;
+    }
+    .video-card:hover {
+      transform: translateY(-2px);
+      border-color: color-mix(in srgb, var(--p1) 55%, var(--line));
+      box-shadow: 0 18px 30px rgba(15, 23, 42, .14);
+    }
+    .video-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; background: var(--line); }
+    .video-pair figure { margin: 0; position: relative; background: #000; }
+    .video-pair video { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; display: block; background: #000; }
+    .video-tag {
+      position: absolute;
+      left: .5rem; top: .5rem;
+      font-size: .7rem;
+      font-weight: 600;
+      padding: .15rem .5rem;
+      border-radius: 999px;
+      background: rgba(15, 23, 42, .72);
+      color: #fff;
+    }
+    .video-tag.ours { background: rgba(15, 118, 110, .92); }
+    .cat-pill {
+      display: inline-block;
+      font-size: .72rem;
+      font-weight: 600;
+      color: var(--p1);
+      background: var(--ours-row-bg);
+      border-radius: 999px;
+      padding: .15rem .6rem;
+    }
+    .prompt-preview {
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+
+    /* ---------- Tables ---------- */
+    .table-title { font-size: 1.2rem; font-weight: 700; margin-bottom: .7rem; text-align: center; color: var(--p1); }
+    .table-note { font-size: .85rem; color: var(--muted); text-align: center; margin-top: .6rem; }
+    .table-wrap { overflow-x: auto; }
+    table.data-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: .84rem;
+      line-height: 1.3;
+      min-width: 760px;
+    }
+    table.data-table.compact { min-width: 420px; }
+    .data-table.compact tbody td:first-child,
+    .data-table.compact thead tr:first-child th:first-child { min-width: 140px; }
+    .data-table thead th {
+      border-bottom: 2px solid var(--line);
+      padding: .52rem .48rem;
+      color: var(--muted);
+      font-weight: 700;
+      text-align: center;
+      background: var(--bg);
+      line-height: 1.25;
+    }
+    .data-table thead tr.group th { border-bottom: 1px solid var(--line); color: var(--text); }
+    .data-table tbody td {
+      border-bottom: 1px solid color-mix(in srgb, var(--line) 75%, transparent);
+      padding: .56rem .48rem;
+      text-align: center;
+      white-space: nowrap;
+      background: var(--bg);
+    }
+    .data-table tbody td:first-child,
+    .data-table thead tr:first-child th:first-child {
+      text-align: left;
+      position: sticky;
+      left: 0;
+      z-index: 1;
+      min-width: 190px;
+    }
+    .data-table tbody tr.group-label td {
+      background: #f8fafc;
+      color: var(--muted);
+      font-style: italic;
+      font-weight: 600;
+      text-align: left;
+    }
+    .data-table tbody tr.sub td:first-child { padding-left: 1.4rem; }
+    .data-table tbody tr.ours-row td { background: var(--ours-row-bg); font-weight: 500; }
+    .data-table tbody tr.ours-row td:first-child { font-weight: 700; color: var(--p1); }
+    .data-table tbody tr td.best-cell,
+    .data-table tbody tr.ours-row td.best-cell {
+      background: var(--ours-sota-bg);
+      color: var(--ours-sota-text);
+      font-weight: 700;
+    }
+    .data-table tbody td.second-cell { text-decoration: underline; text-underline-offset: 3px; font-weight: 600; }
+    .data-table tbody tr.divider td { border-top: 2px solid var(--line); }
+    .side-by-side { display: grid; grid-template-columns: 1fr; gap: 2rem; align-items: start; }
+    .side-by-side > * { min-width: 0; }
+    @media (min-width: 1024px) { .side-by-side { grid-template-columns: 1fr 1fr; } }
+
+    .citation-block {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 3rem 1rem 4rem;
+      border-top: 1px solid var(--line);
+      scroll-margin-top: 3.5rem;
+    }
+    .copy-btn {
+      position: absolute;
+      top: .6rem; right: .6rem;
+      font-size: .75rem;
+      padding: .3rem .7rem;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, .12);
+      color: #e2e8f0;
+      border: 1px solid rgba(255, 255, 255, .25);
+    }
+    .copy-btn:hover { background: rgba(255, 255, 255, .22); }
+    .modal-backdrop { background: rgba(2, 6, 23, .82); }
+  </style>
+</head>
+<body class="antialiased">
+  <nav class="fixed top-0 left-0 right-0 z-40 glass-nav">
+    <div class="max-w-7xl mx-auto px-4 h-14 flex items-center justify-between">
+      <a href="#home" class="font-bold text-lg flex items-center gap-2">
+        <svg viewBox="0 0 64 64" class="h-7 w-7" aria-hidden="true"><rect width="64" height="64" rx="14" fill="#0f766e"/><path d="M32 12v34M20 26h24M16 38c2 9 9 14 16 14s14-5 16-14" stroke="white" stroke-width="5" fill="none" stroke-linecap="round"/></svg>
+        <span class="gradient-text brand text-xl">AnchorCache</span>
+      </a>
+      <div class="flex items-center gap-3 md:gap-5 text-sm">
+        <a href="#abstract" class="text-slate-500 hover:text-teal-700">Abstract</a>
+        <a href="#method" class="text-slate-500 hover:text-teal-700 hidden sm:inline">Method</a>
+        <a href="#showcase" class="text-slate-500 hover:text-teal-700">Showcase</a>
+        <a href="#efficiency" class="text-slate-500 hover:text-teal-700 hidden sm:inline">Efficiency</a>
+        <a href="#results" class="text-slate-500 hover:text-teal-700 hidden sm:inline">Quantitative</a>
+        <a href="#citation" class="text-slate-500 hover:text-teal-700 hidden md:inline">Citation</a>
+      </div>
+    </div>
+  </nav>
+
+  <main id="home">
+    <section class="hero-stage">
+      <div class="marquee-wrap" id="marquee-wrap" aria-hidden="true"></div>
+      <div class="hero-overlay">
+        <div class="max-w-6xl w-full">
+          <h1 class="hero-title text-6xl md:text-8xl font-bold tracking-tight">AnchorCache</h1>
+          <p class="mt-4 text-2xl md:text-3xl font-semibold text-[color:var(--p1)] max-w-4xl mx-auto leading-snug">
+            Beyond Attention Masks: Instruction Anchoring for Efficient In-Context Diffusion Generation
+          </p>
+          <p class="author-line mt-6 text-lg md:text-xl font-semibold text-slate-800 max-w-4xl mx-auto leading-relaxed">
+            <span class="whitespace-nowrap">Yangshuai Liu<sup>1,*,‡</sup>,</span>&nbsp;
+            <span class="whitespace-nowrap">Zheming Li<sup>2,*</sup>,</span>&nbsp;
+            <span class="whitespace-nowrap">Jiaao Li<sup>2</sup>,</span>&nbsp;
+            <span class="whitespace-nowrap">Kang He<sup>2</sup>,</span>&nbsp;
+            <span class="whitespace-nowrap">Ziliang Lai<sup>2</sup>,</span>&nbsp;
+            <span class="whitespace-nowrap">Zhitai Liu<sup>1,†</sup>,</span>&nbsp;
+            <span class="whitespace-nowrap">Chengru Song<sup>2,†</sup></span>
+          </p>
+          <p class="mt-2 text-base md:text-lg text-slate-600">
+            <sup>1</sup>Harbin Institute of Technology &nbsp;&nbsp; <sup>2</sup>KlingAI Research
+          </p>
+          <p class="mt-1 text-xs md:text-sm text-slate-500">
+            *Equal contribution &nbsp;·&nbsp; †Corresponding authors &nbsp;·&nbsp; ‡Work done during an internship at KlingAI Research
+          </p>
+
+          <div class="mt-8 flex flex-wrap justify-center gap-3" id="hero-links"></div>
+
+          <div class="mt-10 grid grid-cols-2 md:grid-cols-4 gap-3 max-w-4xl mx-auto text-left">
+            <div class="stat-card"><div class="stat-num">6.40&times;</div><div class="stat-label">DiT speedup on Qwen-Image-Edit with 8 reference images</div></div>
+            <div class="stat-card"><div class="stat-num">100.1%</div><div class="stat-label">average quality recovery of the full-attention teacher across 4 models</div></div>
+            <div class="stat-card"><div class="stat-num">0</div><div class="stat-label">new learnable parameters</div></div>
+            <div class="stat-card"><div class="stat-num">3</div><div class="stat-label">modalities: image, speech, and video</div></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="abstract" class="section">
+      <h2 class="section-heading text-4xl font-bold text-center mb-7">Abstract</h2>
+      <p class="max-w-5xl mx-auto text-justify leading-relaxed text-slate-600">
+        In-context diffusion transformers concatenate instruction, target, and reference tokens into a single sequence for joint attention.
+        Reference-side computation must be repeated at every denoising step, with computation growing rapidly as more references are added.
+        Decoupling the reference tokens from the target enables exact K/V reuse across denoising steps. This isolation, however, prevents the
+        reference tokens from attending to the instruction, degrading instruction following and reference fidelity. This trade-off cannot be
+        resolved by attention mask design alone. We introduce <strong class="text-[color:var(--p1)]">AnchorCache</strong>, a parameter-free
+        token layout and attention mask co-design that inserts static text anchors. The anchors condition the reference representations on the
+        instruction during cache construction, after which the resulting reference K/V are reused exactly across denoising steps. This structural
+        conversion initially degrades generation quality. We recover the lost performance with teacher-forced velocity distillation, followed by a
+        short on-policy stage that queries the teacher at student-visited states. To our knowledge, this is the first use of on-policy distillation
+        for architectural recovery in diffusion models. Across benchmarks spanning image, speech, and video generation, AnchorCache matches
+        full-attention quality. Its efficiency gains increase with the reference context, reaching a
+        <strong class="text-[color:var(--p1)]">6.40&times;</strong> speedup in DiT inference.
+      </p>
+    </section>
+
+    <section id="contributions" class="section">
+      <h2 class="section-heading text-4xl font-bold text-center mb-8">Contributions</h2>
+      <div class="max-w-6xl mx-auto grid md:grid-cols-3 gap-8 text-slate-600">
+        <div>
+          <p class="text-xl font-bold mb-2 text-[color:var(--p1)]">01</p>
+          <p>We introduce <strong class="text-[color:var(--p1)]">AnchorCache</strong>, a parameter-free token layout and attention mask co-design that makes reference K/V instruction-aware while preserving exact reuse across denoising steps, resolving a structural trade-off that cannot be addressed by attention-mask design alone.</p>
+        </div>
+        <div>
+          <p class="text-xl font-bold mb-2 text-[color:var(--p1)]">02</p>
+          <p>We develop a <strong class="text-[color:var(--p1)]">two-stage architectural recovery</strong> procedure that combines teacher-forced velocity distillation with a short on-policy stage at student-visited states &mdash; to our knowledge, the first application of on-policy distillation to architectural recovery in diffusion models.</p>
+        </div>
+        <div>
+          <p class="text-xl font-bold mb-2 text-[color:var(--p1)]">03</p>
+          <p>We demonstrate AnchorCache across <strong class="text-[color:var(--p1)]">image, speech, and video generation</strong>. It matches full-attention quality across task-specific benchmarks, while its efficiency gains increase with the reference context and DiT inference speedups reach 6.40&times;.</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="method" class="section">
+      <h2 class="section-heading text-4xl font-bold text-center mb-6">Method</h2>
+      <div class="max-w-6xl mx-auto">
+        <p class="max-w-4xl mx-auto text-center text-slate-600 mb-8 leading-relaxed">
+          Isolating the reference branch from the evolving target makes its K/V exactly cacheable, but also cuts it off from the instruction.
+          Letting references attend to the live instruction does not help either: those states are contextualized by $X_t$, creating the path
+          $X_t \rightarrow \mathrm{LT} \rightarrow \mathrm{R}$. AnchorCache adds a <strong class="text-[color:var(--p1)]">static copy of the instruction</strong>
+          ($\mathrm{ST}$, fixed timestep $t_{\mathrm{ST}}=0$) that conditions the references once during cache construction and is then discarded.
+        </p>
+
+        <img class="figure-img" src="assets/figs/method_flow.png" alt="Overview of AnchorCache" loading="lazy">
+        <p class="caption">
+          <strong>Overview of AnchorCache.</strong> Top (a): static text anchors condition the reference branch once during cache construction.
+          Only the resulting reference K/V are retained and reused across denoising steps. Bottom: attention structures for (b) full attention,
+          (c) isolated cache, and (d) AnchorCache, where rows denote queries and columns denote keys and values.
+        </p>
+
+        <div class="grid md:grid-cols-3 gap-4 mt-10">
+          <div class="topo-card">
+            <p class="font-bold text-lg">Full attention</p>
+            <p class="text-sm text-slate-500 mb-3">$[\mathrm{LT}; X_t; \mathrm{R}]$ jointly attend at every step.</p>
+            <div class="check-row"><span>Exact reference K/V reuse</span><span class="no">&#10007;</span></div>
+            <div class="check-row"><span>Instruction-aware references</span><span class="yes">&#10003;</span></div>
+            <div class="check-row"><span>Repeated reference cost</span><span class="mono text-xs">$O(TN_\mathrm{R}^2)$</span></div>
+          </div>
+          <div class="topo-card">
+            <p class="font-bold text-lg">Isolated cache</p>
+            <p class="text-sm text-slate-500 mb-3">$\mathrm{R}$ attends only to itself; $X_t$ reads cached K/V.</p>
+            <div class="check-row"><span>Exact reference K/V reuse</span><span class="yes">&#10003;</span></div>
+            <div class="check-row"><span>Instruction-aware references</span><span class="no">&#10007;</span></div>
+            <div class="check-row"><span>Repeated reference cost</span><span class="mono text-xs">$O(TSN_\mathrm{R})$</span></div>
+          </div>
+          <div class="topo-card ours">
+            <p class="font-bold text-lg text-[color:var(--p1)]">AnchorCache (ours)</p>
+            <p class="text-sm text-slate-500 mb-3">$[\mathrm{ST}, \mathrm{R}]$ form a static subgraph computed once.</p>
+            <div class="check-row"><span>Exact reference K/V reuse</span><span class="yes">&#10003;</span></div>
+            <div class="check-row"><span>Instruction-aware references</span><span class="yes">&#10003;</span></div>
+            <div class="check-row"><span>Repeated reference cost</span><span class="mono text-xs">$O(TSN_\mathrm{R})$</span></div>
+          </div>
+        </div>
+
+        <div class="eq-box mt-6 text-center">
+          <p class="text-sm text-slate-500 mb-2">Instruction-aware reference retrieval: conditioning is represented on both sides of the attention interaction.</p>
+          $$q_X(X_t,c)^\top k_R(r) \quad\longrightarrow\quad q_X(X_t,c)^\top k_R(r,c)$$
+        </div>
+
+        <h3 class="subsection-heading text-2xl font-bold text-center mt-14 mb-4">Two-Stage Architectural Recovery</h3>
+        <p class="max-w-4xl mx-auto text-center text-slate-600 mb-6 leading-relaxed">
+          Converting a pretrained full-attention model to the AnchorCache topology changes its information flow. We first recover quality with
+          teacher-forced velocity distillation on data-derived interpolants, then run a short on-policy stage that queries the frozen full-attention
+          teacher at states visited by the student's own sampler.
+        </p>
+        <img class="figure-img max-w-5xl mx-auto" src="assets/figs/training_staged.png" alt="Two-stage architectural recovery" loading="lazy">
+        <p class="caption max-w-5xl mx-auto">
+          <strong>Two-stage architectural recovery.</strong> Stage 1 queries the teacher at data-derived interpolants.
+          Stage 2 queries the same teacher at states visited by the student and corrects residual errors along the student's inference trajectory.
+        </p>
+        <div class="grid md:grid-cols-2 gap-4 mt-6">
+          <div class="topo-card">
+            <p class="font-bold">Stage 1 &middot; Teacher-forced velocity distillation <span class="text-slate-400 font-normal">(30k steps)</span></p>
+            <div class="mt-2 overflow-x-auto">$$\mathcal{L}_{\mathrm{TF}}=\mathbb{E}\big\|v_\theta(x_t,c,t)-v_{\mathrm{full}}(x_t,c,t)\big\|_2^2,\quad x_t=(1-t)x_0+tx_1$$</div>
+          </div>
+          <div class="topo-card ours">
+            <p class="font-bold text-[color:var(--p1)]">Stage 2 &middot; On-policy refinement <span class="text-slate-400 font-normal">(500 steps)</span></p>
+            <div class="mt-2 overflow-x-auto">$$\mathcal{L}_{\mathrm{OPD}}=\mathbb{E}\big\|v_\theta(\bar z_t,c,t)-v_{\mathrm{full}}(\bar z_t,c,t)\big\|_2^2,\quad \bar z_t=\operatorname{sg}(z_t^\theta)$$</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="showcase" class="section">
+      <h2 class="section-heading text-4xl font-bold text-center mb-3">Showcase</h2>
+      <p class="max-w-3xl mx-auto text-center text-slate-600 mb-10">
+        Within each case, all methods use the same sampling settings and seed. Cases marked
+        <span class="inline-block text-[0.7rem] font-bold px-2 rounded-full bg-[color:var(--ours-row-bg)] text-[color:var(--p1)]">PAPER</span>
+        are the examples shown in the paper; the rest are additional examples. Click any image to enlarge.
+      </p>
+
+      <div class="max-w-7xl mx-auto space-y-16">
+        <div id="omni-viewer">
+          <div class="flex items-end justify-between gap-4 flex-wrap">
+            <div>
+              <h3 class="subsection-heading text-2xl font-bold">Multi-Reference Generation &middot; OmniContext</h3>
+              <p class="text-sm text-slate-500 mt-1">Qwen-Image-Edit-2511 with two or three reference images. Scores are per-sample VIEScore with GPT-4.1 as judge (PF / SC / Overall).</p>
+            </div>
+            <div class="flex gap-2">
+              <button class="nav-btn" data-step="-1" aria-label="Previous case">&#8592;</button>
+              <button class="nav-btn" data-step="1" aria-label="Next case">&#8594;</button>
+            </div>
+          </div>
+          <div class="chip-row mt-3" data-role="chips"></div>
+          <p class="viewer-prompt" data-role="prompt"></p>
+          <div class="viewer-grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4" data-role="grid"></div>
+        </div>
+
+        <div id="gedit-viewer">
+          <div class="flex items-end justify-between gap-4 flex-wrap">
+            <div>
+              <h3 class="subsection-heading text-2xl font-bold">Instruction-Based Editing &middot; GEdit-Bench</h3>
+              <p class="text-sm text-slate-500 mt-1">The paper's appendix shows a contiguous batch of ten examples, which also includes cases where the three outputs look alike.</p>
+            </div>
+            <div class="flex gap-2">
+              <button class="nav-btn" data-step="-1" aria-label="Previous case">&#8592;</button>
+              <button class="nav-btn" data-step="1" aria-label="Next case">&#8594;</button>
+            </div>
+          </div>
+          <div class="chip-row mt-3" data-role="chips"></div>
+          <p class="viewer-prompt" data-role="prompt"></p>
+          <div class="viewer-grid grid-cols-2 lg:grid-cols-4" data-role="grid"></div>
+        </div>
+
+        <div>
+          <h3 class="subsection-heading text-2xl font-bold">In-Context Video Editing &middot; OpenVE-Bench</h3>
+          <p class="text-sm text-slate-500 mt-1 mb-5">Representative video-editing results generated by AnchorCache on OpenVE-Bench (MiniMax-H3). Each card plays the reference video (left) and the AnchorCache output (right). Click a card for a larger view.</p>
+          <p class="font-semibold text-slate-700 mb-3"><span class="inline-block text-[0.7rem] font-bold px-2 mr-1 rounded-full bg-[color:var(--ours-row-bg)] text-[color:var(--p1)]">PAPER</span>Examples shown in the paper</p>
+          <div id="openve-paper" class="grid md:grid-cols-2 gap-5"></div>
+          <p class="font-semibold text-slate-700 mt-10 mb-3">Additional examples</p>
+          <div id="openve-extra" class="grid md:grid-cols-2 gap-5"></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="efficiency" class="section">
+      <h2 class="section-heading text-4xl font-bold text-center mb-8">Efficiency &amp; Recovery</h2>
+      <div class="max-w-6xl mx-auto side-by-side">
+        <div>
+          <img class="figure-img" src="assets/figs/nref_time.png" alt="DiT latency vs number of references" loading="lazy">
+          <p class="caption">
+            <strong>Scaling with the number of references.</strong> Under full attention, every additional reference is re-processed at every
+            denoising step. AnchorCache computes the reference representations once and reuses the cached K/V, so its relative
+            efficiency gain increases with the number of references (Qwen-Image-Edit, 20B).
+          </p>
+        </div>
+        <div class="space-y-4 text-slate-600 leading-relaxed">
+          <p class="text-xl font-bold text-[color:var(--p1)]">Identical per-step cost to the isolated cache</p>
+          <p>
+            Static text anchors only enter the one-time cache-construction subgraph $[\mathrm{ST}, \mathrm{R}]$. The extra cost relative to the
+            isolated cache is $O\big(N_{\mathrm{ST}}d^2 + (2N_\mathrm{R}N_\mathrm{ST} + N_\mathrm{ST}^2)d\big)$, paid once and amortized over the
+            whole trajectory.
+          </p>
+          <p>
+            With 8 reference images AnchorCache reaches <strong class="text-[color:var(--p1)]">6.40&times;</strong>, nearly matching the
+            6.45&times; of the isolated cache, and combining it with SageAttention2 increases the speedup to
+            <strong class="text-[color:var(--p1)]">7.99&times;</strong>.
+          </p>
+          <p>
+            The construction introduces no learnable parameters and retains a regular attention layout compatible with optimized
+            implementations such as FlashAttention.
+          </p>
+        </div>
+      </div>
+      <div class="max-w-6xl mx-auto mt-12">
+        <img class="figure-img" src="assets/figs/recovery_curves.png" alt="Teacher-forced saturation vs on-policy recovery" loading="lazy">
+        <p class="caption">
+          <strong>Teacher-forced saturation and on-policy recovery.</strong> Starting from the same 30k Stage 1 checkpoint, continued teacher-forced
+          training remains nearly saturated ($8.015\pm0.015$ Overall), while on-policy refinement reaches 8.057 after only 250 updates and 8.185
+          after 500, with every evaluated on-policy checkpoint exceeding the best continued teacher-forced checkpoint. Shaded regions denote
+          mean &plusmn; standard deviation; the green dashed line indicates the full-attention teacher.
+        </p>
+      </div>
+    </section>
+
+    <section id="results" class="section">
+      <h2 class="section-heading text-4xl font-bold text-center mb-3">Quantitative Results</h2>
+      <p class="max-w-3xl mx-auto text-center text-slate-600 mb-10 text-sm">
+        Highlighting follows the paper:
+        <span class="inline-block px-2 rounded bg-[color:var(--ours-sota-bg)] text-white font-semibold">filled</span> = bold (best),
+        <span class="underline underline-offset-2 font-semibold">underlined</span> = second best.
+        Speedup is measured over the complete DiT denoising trajectory relative to the corresponding full-attention model.
+      </p>
+
+      <div class="max-w-7xl mx-auto space-y-12">
+        <div>
+          <p class="table-title">OmniImage Generation</p>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr class="group"><th rowspan="2">Model / Method</th><th colspan="3">OmniContext</th><th>ImgEdit-Bench</th><th colspan="3">GEdit-Bench</th><th>Efficiency</th></tr>
+                <tr><th>PF &uarr;</th><th>SC &uarr;</th><th>Overall &uarr;</th><th>Overall &uarr;</th><th>SC &uarr;</th><th>PQ &uarr;</th><th>Overall &uarr;</th><th>Speedup &uarr;</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>Qwen-Image-Edit</td><td class="best-cell">8.550</td><td class="second-cell">7.867</td><td class="second-cell">8.119</td><td class="second-cell">4.324</td><td class="best-cell">8.097</td><td class="best-cell">7.303</td><td class="best-cell">7.574</td><td>1.00&times;</td></tr>
+                <tr class="sub"><td>+ Isolated cache</td><td>8.155</td><td>7.490</td><td>7.680</td><td>4.219</td><td>7.911</td><td class="second-cell">7.290</td><td>7.475</td><td>6.45&times;</td></tr>
+                <tr class="sub ours-row"><td>+ AnchorCache</td><td class="second-cell">8.418</td><td class="best-cell">8.167</td><td class="best-cell">8.185</td><td class="best-cell">4.351</td><td class="second-cell">8.059</td><td>7.269</td><td class="second-cell">7.540</td><td>6.40&times;</td></tr>
+                <tr class="divider"><td>FLUX.2 9B <em>(4 steps)</em></td><td class="second-cell">8.602</td><td class="second-cell">8.043</td><td class="second-cell">8.230</td><td class="second-cell">3.919</td><td class="second-cell">7.650</td><td>7.376</td><td class="second-cell">7.341</td><td>1.00&times;</td></tr>
+                <tr class="sub"><td>+ Isolated cache</td><td>8.545</td><td>7.527</td><td>7.895</td><td>3.873</td><td>7.331</td><td class="best-cell">7.452</td><td>7.132</td><td>2.91&times;</td></tr>
+                <tr class="sub ours-row"><td>+ AnchorCache</td><td class="best-cell">8.665</td><td class="best-cell">8.053</td><td class="best-cell">8.258</td><td class="best-cell">3.949</td><td class="best-cell">7.785</td><td class="second-cell">7.431</td><td class="best-cell">7.437</td><td>2.86&times;</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="side-by-side">
+          <div>
+            <p class="table-title">Zero-shot TTS</p>
+            <div class="table-wrap">
+              <table class="data-table compact">
+                <thead>
+                  <tr class="group"><th rowspan="2">Method</th><th colspan="2">Seed-TTS EN</th><th colspan="2">Seed-TTS ZH</th><th colspan="2">LibriSpeech-PC</th><th rowspan="2">Speedup &uarr;</th></tr>
+                  <tr><th>WER&darr;</th><th>SIM-o&uarr;</th><th>WER&darr;</th><th>SIM-o&uarr;</th><th>WER&darr;</th><th>SIM-o&uarr;</th></tr>
+                </thead>
+                <tbody>
+                  <tr><td>OmniVoice</td><td class="best-cell">1.62</td><td class="best-cell">0.7419</td><td class="best-cell">0.84</td><td class="second-cell">0.7779</td><td class="second-cell">1.41</td><td class="second-cell">0.7327</td><td>1.00&times;</td></tr>
+                  <tr class="sub"><td>+ Isolated cache</td><td>1.69</td><td>0.6985</td><td>1.07</td><td>0.7687</td><td>1.64</td><td>0.6960</td><td>1.50&times;</td></tr>
+                  <tr class="sub ours-row"><td>+ AnchorCache</td><td class="second-cell">1.65</td><td class="second-cell">0.7398</td><td class="second-cell">0.97</td><td class="best-cell">0.7780</td><td class="best-cell">1.38</td><td class="best-cell">0.7327</td><td>1.50&times;</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <div>
+            <p class="table-title">OmniVideo Generation &middot; OpenVE-Bench</p>
+            <div class="table-wrap">
+              <table class="data-table compact">
+                <thead>
+                  <tr class="group"><th rowspan="2">Method</th><th colspan="3">Seed1.6-VL judge</th><th colspan="3">InternVL3.5-38B judge</th><th rowspan="2">Speedup &uarr;</th></tr>
+                  <tr><th>Overall</th><th>SA</th><th>NSA</th><th>Overall</th><th>SA</th><th>NSA</th></tr>
+                </thead>
+                <tbody>
+                  <tr><td>MiniMax-H3</td><td class="second-cell">4.411</td><td class="second-cell">4.388</td><td>4.525</td><td>4.125</td><td>4.134</td><td>4.082</td><td>1.00&times;</td></tr>
+                  <tr class="sub"><td>+ Isolated cache</td><td>4.398</td><td>4.351</td><td class="second-cell">4.628</td><td class="second-cell">4.153</td><td class="second-cell">4.139</td><td class="best-cell">4.224</td><td>1.81&times;</td></tr>
+                  <tr class="sub ours-row"><td>+ AnchorCache</td><td class="best-cell">4.479</td><td class="best-cell">4.448</td><td class="best-cell">4.630</td><td class="best-cell">4.160</td><td class="best-cell">4.155</td><td class="second-cell">4.187</td><td>1.80&times;</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <p class="table-title">Comparison with Diffusion Acceleration Methods &middot; OmniContext</p>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr class="group"><th rowspan="2">Method</th><th colspan="2">Multiple</th><th colspan="2">Scene</th><th colspan="3">All 400</th><th>Efficiency</th></tr>
+                <tr><th>PF &uarr;</th><th>SC &uarr;</th><th>PF &uarr;</th><th>SC &uarr;</th><th>PF &uarr;</th><th>SC &uarr;</th><th>Overall &uarr;</th><th>Speedup &uarr;</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>Base (Qwen-Image-Edit)</td><td class="second-cell">8.660</td><td>8.020</td><td class="best-cell">8.180</td><td class="second-cell">7.693</td><td class="best-cell">8.550</td><td>7.867</td><td class="second-cell">8.119</td><td>1.00&times;</td></tr>
+                <tr><td>SVDQuant</td><td>7.913</td><td>7.807</td><td>7.247</td><td>6.967</td><td>7.888</td><td>7.520</td><td>7.582</td><td>1.49&times;</td></tr>
+                <tr><td>TeaCache</td><td>8.513</td><td>7.873</td><td>7.813</td><td>7.427</td><td>8.330</td><td>7.675</td><td>7.896</td><td>3.56&times;</td></tr>
+                <tr><td>SageAttention2</td><td class="best-cell">8.720</td><td class="second-cell">8.280</td><td class="second-cell">7.993</td><td>7.580</td><td class="second-cell">8.495</td><td class="second-cell">7.923</td><td>8.105</td><td>1.47&times;</td></tr>
+                <tr><td>ToPi</td><td>8.580</td><td>8.107</td><td>7.940</td><td>7.447</td><td>8.400</td><td>7.692</td><td>7.891</td><td>1.42&times;</td></tr>
+                <tr class="divider"><td>Isolated cache</td><td>8.053</td><td>7.967</td><td>7.720</td><td>7.287</td><td>8.155</td><td>7.490</td><td>7.680</td><td>6.45&times;</td></tr>
+                <tr class="ours-row"><td>AnchorCache (ours)</td><td>8.573</td><td class="best-cell">8.453</td><td>7.913</td><td class="best-cell">7.947</td><td>8.418</td><td class="best-cell">8.167</td><td class="best-cell">8.185</td><td>6.40&times;</td></tr>
+                <tr class="sub ours-row"><td>+ SageAttention2</td><td>8.41</td><td>8.32</td><td>7.69</td><td>7.59</td><td>8.31</td><td>8.01</td><td>8.062</td><td>7.99&times;</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p class="table-note">Speedup over the complete 40-step generation with 8 reference images. The combined AnchorCache + SageAttention2 row is from the appendix.</p>
+        </div>
+
+        <div class="side-by-side">
+          <div>
+            <p class="table-title">Ablation: Static Text Anchors &amp; Recovery Stages</p>
+            <div class="table-wrap">
+              <table class="data-table compact">
+                <thead>
+                  <tr class="group"><th rowspan="2">Method</th><th colspan="3">OmniContext</th><th>ImgEdit</th><th colspan="3">GEdit-Bench</th></tr>
+                  <tr><th>PF</th><th>SC</th><th>Overall</th><th>Overall</th><th>SC</th><th>PQ</th><th>Overall</th></tr>
+                </thead>
+                <tbody>
+                  <tr><td>Base (Qwen-Image-Edit)</td><td class="best-cell">8.550</td><td>7.867</td><td class="second-cell">8.119</td><td class="second-cell">4.324</td><td class="best-cell">8.097</td><td class="best-cell">7.303</td><td class="best-cell">7.574</td></tr>
+                  <tr class="divider"><td>Isolated, Stage 1</td><td>8.180</td><td>7.203</td><td>7.529</td><td>4.184</td><td>7.929</td><td>7.181</td><td>7.440</td></tr>
+                  <tr class="sub"><td>+ Stage 2</td><td>8.155</td><td>7.490</td><td>7.680</td><td>4.219</td><td>7.911</td><td class="second-cell">7.290</td><td>7.475</td></tr>
+                  <tr class="divider ours-row"><td>AnchorCache, Stage 1</td><td>8.285</td><td class="second-cell">7.970</td><td>8.019</td><td>4.293</td><td>7.940</td><td>7.252</td><td>7.460</td></tr>
+                  <tr class="sub ours-row"><td>+ Stage 2</td><td class="second-cell">8.418</td><td class="best-cell">8.167</td><td class="best-cell">8.185</td><td class="best-cell">4.351</td><td class="second-cell">8.059</td><td>7.269</td><td class="second-cell">7.540</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <div>
+            <p class="table-title">OPD Query Design</p>
+            <div class="table-wrap">
+              <table class="data-table compact">
+                <thead>
+                  <tr class="group"><th rowspan="2">Query interval</th><th colspan="2">$N_q=1$</th><th colspan="2">$N_q=4$</th></tr>
+                  <tr><th>Overall</th><th>&Delta;</th><th>Overall</th><th>&Delta;</th></tr>
+                </thead>
+                <tbody>
+                  <tr><td>Full trajectory $k\in[1,39]$</td><td>8.084</td><td>+0.065</td><td class="best-cell">8.185</td><td class="best-cell">+0.166</td></tr>
+                  <tr><td>High-noise $k\in[1,14]$</td><td>8.060</td><td>+0.041</td><td>8.131</td><td>+0.112</td></tr>
+                  <tr><td>Mid-noise $k\in[15,24]$</td><td>8.073</td><td>+0.054</td><td>8.051</td><td>+0.032</td></tr>
+                  <tr><td>Low-noise $k\in[25,39]$</td><td>7.936</td><td>&minus;0.083</td><td>7.888</td><td>&minus;0.131</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p class="table-note">All runs start from the same 30k Stage 1 checkpoint (8.019) and are evaluated after 500 on-policy updates.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="citation" class="citation-block">
+      <h2 class="section-heading text-2xl font-bold mb-3">Citation</h2>
+      <div class="relative">
+        <button class="copy-btn" id="copy-bib" type="button">Copy</button>
+        <pre id="bibtex" class="mono text-sm p-4 pr-20 rounded-xl overflow-x-auto bg-slate-950 text-slate-100">@article{liu2026anchorcache,
+  title   = {Beyond Attention Masks: Instruction Anchoring for Efficient In-Context Diffusion Generation},
+  author  = {Liu, Yangshuai and Li, Zheming and Li, Jiaao and He, Kang and Lai, Ziliang and Liu, Zhitai and Song, Chengru},
+  year    = {2026}
+}</pre>
+      </div>
+      <p class="mt-8 text-xs text-slate-400">
+        Page layout adapted from the <a class="underline hover:text-teal-700" href="https://worldscape-moe.com/" target="_blank" rel="noopener noreferrer">Worldscape-MoE</a> project page.
+      </p>
+    </section>
+  </main>
+
+  <div id="media-modal" class="fixed inset-0 z-50 hidden items-center justify-center p-4 modal-backdrop">
+    <div class="w-full max-w-6xl bg-white border border-slate-200 rounded-xl p-4 md:p-6 max-h-[92vh] overflow-y-auto">
+      <div class="flex items-start justify-between gap-3 mb-4">
+        <div>
+          <h3 id="modal-title" class="font-bold text-xl"></h3>
+          <p id="modal-subtitle" class="text-xs text-slate-500 mono mt-1"></p>
+        </div>
+        <div class="flex gap-2 shrink-0">
+          <button id="modal-replay" class="rounded-full border border-slate-200 px-3 py-1.5 text-sm text-slate-600 hover:text-teal-700 hidden" type="button">Replay</button>
+          <button id="modal-close" class="rounded-full border border-slate-200 px-3 py-1.5 text-sm text-slate-600 hover:text-teal-700" type="button">Close</button>
+        </div>
+      </div>
+      <div id="modal-body"></div>
+      <p id="modal-prompt" class="text-sm leading-relaxed text-slate-600 mt-4"></p>
+    </div>
+  </div>
+
+  <script src="assets/data.js"></script>
+  <script>
+    // Empty links render as "coming soon".
+    const LINKS = {
+      arxiv: "https://arxiv.org/pdf/2608.21229v3",
+      code: "https://github.com/yangshuai-liu/AnchorCache"
+    };
+
+    const DATA = window.SITE_DATA;
+    const METHOD_LABELS = { full: "Full attention", isolated: "Isolated cache", anchor: "AnchorCache (ours)" };
+
+    const ICONS = {
+      arxiv: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4l16 16M20 4L4 20"/></svg>',
+      code: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.52-1.33-1.28-1.69-1.28-1.69-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.68 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.83 1.19 3.09 0 4.41-2.69 5.39-5.25 5.67.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5z"/></svg>'
+    };
+
+    function escapeHtml(value) {
+      return String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    }
+
+    function buildHeroLinks() {
+      const host = document.getElementById("hero-links");
+      const items = [["arxiv", "arXiv"], ["code", "Code"]];
+      host.innerHTML = items.map(([key, label]) => {
+        const url = LINKS[key];
+        if (!url) return `<span class="hero-btn is-disabled">${ICONS[key]}${label} (coming soon)</span>`;
+        return `<a class="hero-btn" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${ICONS[key]}${label}</a>`;
+      }).join("");
+    }
+
+    function buildMarquee() {
+      const wrap = document.getElementById("marquee-wrap");
+      const pool = [
+        ...DATA.omnicontext.map((c) => `assets/hero/omni_${c.id}.jpg`),
+        ...DATA.gedit.map((c) => `assets/hero/gedit_${c.id}.jpg`)
+      ];
+      const rows = 4;
+      for (let r = 0; r < rows; r++) {
+        const imgs = pool.filter((_, i) => i % rows === r);
+        const html = imgs.map((src) => `<img src="${src}" alt="" loading="eager" decoding="async">`).join("");
+        const row = document.createElement("div");
+        row.className = `marquee-row${r % 2 ? " reverse" : ""}`;
+        row.innerHTML = `<div class="marquee-track" style="animation-duration:${70 + r * 12}s">${html}${html}</div>`;
+        wrap.appendChild(row);
+      }
+    }
+
+    // ---------- Modal ----------
+    const modal = document.getElementById("media-modal");
+    const modalBody = document.getElementById("modal-body");
+    const modalReplay = document.getElementById("modal-replay");
+
+    function openModal({ title, subtitle = "", body, prompt = "", replay = false }) {
+      document.getElementById("modal-title").textContent = title;
+      document.getElementById("modal-subtitle").textContent = subtitle;
+      document.getElementById("modal-prompt").textContent = prompt;
+      modalBody.innerHTML = body;
+      modalReplay.classList.toggle("hidden", !replay);
+      modalBody.querySelectorAll("video").forEach((v) => { v.muted = true; v.play().catch(() => {}); });
+      modal.classList.remove("hidden");
+      modal.classList.add("flex");
+      document.body.style.overflow = "hidden";
+    }
+    function closeModal() {
+      modalBody.querySelectorAll("video").forEach((v) => { v.pause(); v.removeAttribute("src"); v.load(); });
+      modalBody.innerHTML = "";
+      modal.classList.add("hidden");
+      modal.classList.remove("flex");
+      document.body.style.overflow = "";
+    }
+    modalReplay.addEventListener("click", () => {
+      modalBody.querySelectorAll("video").forEach((v) => { v.currentTime = 0; v.play().catch(() => {}); });
+    });
+    document.getElementById("modal-close").addEventListener("click", closeModal);
+    modal.addEventListener("click", (e) => { if (e.target === modal) closeModal(); });
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !modal.classList.contains("hidden")) closeModal(); });
+
+    function openImage(src, title, prompt) {
+      openModal({
+        title,
+        body: `<img src="${escapeHtml(src)}" alt="${escapeHtml(title)}" class="w-full max-h-[72vh] object-contain bg-slate-50 rounded-lg">`,
+        prompt
+      });
+    }
+
+    // ---------- Image comparison viewers ----------
+    function makeViewer(rootId, cases, renderGrid, chipLabel, startId) {
+      const root = document.getElementById(rootId);
+      const chips = root.querySelector('[data-role="chips"]');
+      const promptEl = root.querySelector('[data-role="prompt"]');
+      const grid = root.querySelector('[data-role="grid"]');
+      let index = 0;
+
+      chips.innerHTML = cases.map((c, i) => `<button class="chip" data-i="${i}" title="${escapeHtml(c.prompt)}">${c.paper ? '<span class="paper-badge">PAPER</span>' : ""}${escapeHtml(chipLabel(c, i))}</button>`).join("");
+
+      function show(i) {
+        index = (i + cases.length) % cases.length;
+        const c = cases[index];
+        chips.querySelectorAll(".chip").forEach((el, j) => el.classList.toggle("active", j === index));
+        const active = chips.children[index];
+        chips.scrollTo({ left: active.offsetLeft - chips.clientWidth / 2 + active.clientWidth / 2, behavior: "smooth" });
+        promptEl.textContent = c.prompt;
+        grid.innerHTML = renderGrid(c);
+        grid.querySelectorAll("img[data-zoom]").forEach((img) => {
+          img.addEventListener("click", () => openImage(img.dataset.zoom, img.dataset.title, c.prompt));
+        });
+      }
+
+      chips.addEventListener("click", (e) => {
+        const btn = e.target.closest(".chip");
+        if (btn) show(Number(btn.dataset.i));
+      });
+      root.querySelectorAll(".nav-btn").forEach((b) => b.addEventListener("click", () => show(index + Number(b.dataset.step))));
+      show(Math.max(0, cases.findIndex((c) => c.id === startId)));
+    }
+
+    function outputPanel(key, src, extra = "") {
+      const ours = key === "anchor";
+      return `
+        <div class="panel${ours ? " ours" : ""}">
+          <div class="panel-head"><span>${METHOD_LABELS[key]}</span></div>
+          <img class="panel-img" src="${src}" alt="${METHOD_LABELS[key]}" data-zoom="${src}" data-title="${METHOD_LABELS[key]}" loading="lazy">
+          ${extra}
+        </div>`;
+    }
+
+    function renderOmni(c) {
+      const refs = `
+        <div class="panel">
+          <div class="panel-head"><span>References</span><span class="text-xs text-slate-400 font-normal">${c.inputs.length} images</span></div>
+          <div class="ref-stack">${c.inputs.map((src, i) => `<img src="${src}" alt="Reference ${i + 1}" data-zoom="${src}" data-title="Reference ${i + 1}" loading="lazy">`).join("")}</div>
+        </div>`;
+      const outs = ["full", "isolated", "anchor"].map((key) => {
+        const o = c.outputs[key];
+        const scores = `<div class="score-row"><span class="score">PF ${o.pf}</span><span class="score">SC ${o.sc}</span><span class="score">Overall ${o.overall}</span></div>`;
+        return outputPanel(key, o.src, scores);
+      }).join("");
+      return refs + outs;
+    }
+
+    function renderGedit(c) {
+      const input = `
+        <div class="panel">
+          <div class="panel-head"><span>Input</span></div>
+          <img class="panel-img" src="${c.input}" alt="Input" data-zoom="${c.input}" data-title="Input" loading="lazy">
+        </div>`;
+      return input + ["full", "isolated", "anchor"].map((key) => outputPanel(key, c[key])).join("");
+    }
+
+    // ---------- Video grid ----------
+    function lazyVideo(src, poster) {
+      return `<video poster="${poster}" preload="none" muted loop playsinline disablepictureinpicture data-lazy-video><source data-src="${src}" type="video/mp4"></video>`;
+    }
+
+    function buildOpenVE() {
+      const cards = (filter) => DATA.openve.map((c, i) => [c, i]).filter(([c]) => filter(c)).map(([c, i]) => `
+        <div class="video-card" data-i="${i}">
+          <div class="video-pair">
+            <figure>${lazyVideo(c.src, c.srcPoster)}<span class="video-tag">Reference</span></figure>
+            <figure>${lazyVideo(c.out, c.outPoster)}<span class="video-tag ours">AnchorCache</span></figure>
+          </div>
+          <div class="p-4">
+            <span class="cat-pill">${escapeHtml(c.category)}</span>
+            <p class="text-sm text-slate-600 mt-2 prompt-preview">${escapeHtml(c.prompt)}</p>
+          </div>
+        </div>`).join("");
+      document.getElementById("openve-paper").innerHTML = cards((c) => c.paper);
+      document.getElementById("openve-extra").innerHTML = cards((c) => !c.paper);
+      document.querySelectorAll("#showcase .video-card").forEach((card) => {
+        card.addEventListener("click", () => {
+          const c = DATA.openve[Number(card.dataset.i)];
+          const vid = (src, poster, label, ours) => `
+            <figure class="relative m-0">
+              <video src="${src}" poster="${poster}" muted loop playsinline autoplay disablepictureinpicture class="w-full aspect-video bg-black rounded-lg object-contain"></video>
+              <span class="video-tag${ours ? " ours" : ""}">${label}</span>
+            </figure>`;
+          openModal({
+            title: `OpenVE-Bench · ${c.category}`,
+            subtitle: `case ${c.id}`,
+            body: `<div class="grid md:grid-cols-2 gap-4">${vid(c.src, c.srcPoster, "Reference", false)}${vid(c.out, c.outPoster, "AnchorCache", true)}</div>`,
+            prompt: c.prompt,
+            replay: true
+          });
+        });
+      });
+    }
+
+    function initLazyVideos() {
+      const videos = Array.from(document.querySelectorAll("video[data-lazy-video]"));
+      const load = (video) => {
+        if (video.dataset.loaded === "true") return;
+        const source = video.querySelector("source[data-src]");
+        source.src = source.dataset.src;
+        video.dataset.loaded = "true";
+        video.load();
+      };
+      const observer = new IntersectionObserver((entries) => {
+        entries.forEach((entry) => {
+          const video = entry.target;
+          if (entry.isIntersecting) {
+            load(video);
+            video.muted = true;
+            video.play().catch(() => {});
+          } else {
+            video.pause();
+          }
+        });
+      }, { rootMargin: "200px 0px", threshold: 0.35 });
+      videos.forEach((v) => observer.observe(v));
+    }
+
+    document.getElementById("copy-bib").addEventListener("click", async (e) => {
+      try {
+        await navigator.clipboard.writeText(document.getElementById("bibtex").textContent);
+        e.target.textContent = "Copied";
+        setTimeout(() => { e.target.textContent = "Copy"; }, 1500);
+      } catch (_) {}
+    });
+
+    buildHeroLinks();
+    buildMarquee();
+    makeViewer("omni-viewer", DATA.omnicontext, renderOmni, (c, i) => `#${c.id} · ${c.task}`);
+    makeViewer("gedit-viewer", DATA.gedit, renderGedit, (c) => c.prompt, "13");
+    buildOpenVE();
+    initLazyVideos();
+
+    window.addEventListener("load", () => {
+      if (window.renderMathInElement) {
+        renderMathInElement(document.body, {
+          delimiters: [
+            { left: "$$", right: "$$", display: true },
+            { left: "$", right: "$", display: false }
+          ],
+          throwOnError: false
+        });
+      }
+    });
+  </script>
+</body>
+</html>
